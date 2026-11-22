@@ -140,10 +140,25 @@ function pickImportFile(){
   const inp = document.getElementById("importFile");
   inp.value = ""; inp.click();
 }
+function openPasteImport(){
+  openSheet(`<h3>Daten einfügen</h3>
+    <p class="small">Wenn die bisherige App «Daten kopiert» gemeldet hat: hier ins Feld tippen und <b>Einsetzen</b> wählen.</p>
+    <textarea class="f" id="pasteData" rows="6" placeholder="Hier einsetzen …" style="font-size:12px;font-family:monospace"></textarea>
+    <div class="actions"><button class="btn sec" id="cancel">Abbrechen</button><button class="btn" id="ok">Weiter</button></div>`, s => {
+    s.querySelector("#cancel").onclick = closeSheet;
+    s.querySelector("#ok").onclick = () => {
+      let data; try { data = JSON.parse(s.querySelector("#pasteData").value.trim()); } catch (_){ toast("Das sind keine gültigen Daten – bitte nochmals kopieren."); return; }
+      confirmImport(data);
+    };
+  });
+}
 document.addEventListener("change", async e => {
   if (e.target.id !== "importFile" || !e.target.files[0]) return;
   let data;
   try { data = JSON.parse(await e.target.files[0].text()); } catch (_){ toast("Die Datei ist keine gültige Datensicherung."); return; }
+  confirmImport(data);
+});
+function confirmImport(data){
   if (!data || data.app !== "pusteblume-laden"){ toast("Das ist keine Pusteblume-Datensicherung."); return; }
   const na = Object.keys(data.articles || {}).length, nm = (data.moves || []).length, nc = (data.closings || []).length;
   const hasData = Object.keys(articles).length > 0;
@@ -160,7 +175,7 @@ document.addEventListener("change", async e => {
       catch (err){ console.error(err); b.disabled = false; b.textContent = "Importieren"; toast("Import fehlgeschlagen" + errText(err)); }
     };
   });
-});
+}
 
 /* ---------- Updates (Service Worker) ---------- */
 function showUpdateBanner(reg){
@@ -312,7 +327,7 @@ function filtered(){ return allArticles().filter(a => (ui.cat === "Alle" || a.ca
 
 /* Verkauf: Laden / Ausserordentlich (Zuhause) / Zahlungen */
 function viewVerkauf(){
-  if (!Object.keys(articles).length) return `<div class="login" style="margin-top:12px"><h2>Willkommen</h2><p class="small">Noch keine Artikel vorhanden. Übernimm deine Daten aus der bisherigen App: dort unter <b>Auswertung → «Alle Daten sichern»</b> die Datei speichern und hier einlesen.</p><button class="btn block" data-import>Datensicherung einlesen</button><button class="btn sec block" data-new style="margin-top:8px">Oder: ersten Artikel anlegen</button></div>`;
+  if (!Object.keys(articles).length) return `<div class="login" style="margin-top:12px"><h2>Willkommen</h2><p class="small">Noch keine Artikel vorhanden. Übernimm deine Daten aus der bisherigen App: dort unter <b>Auswertung → «Alle Daten sichern»</b> die Datei speichern und hier einlesen.</p><button class="btn block" data-import>Datensicherung einlesen (Datei)</button><button class="btn sec block" data-import-paste style="margin-top:8px">Kopierte Daten einfügen</button><button class="btn sec block" data-new style="margin-top:8px">Oder: ersten Artikel anlegen</button></div>`;
   const open = openSum(moves);
   let h = `<div class="seg" style="margin-top:4px">${[["laden","Laden"],["sets","Geschenksets"],["extra","Ausserord."],["zahlungen","Zahlungen"]].map(([k,l]) => `<button class="${ui.saleMode===k?"on":""}" data-smode="${k}">${l}${k==="zahlungen"&&open>0?' <span class="dot"></span>':""}</button>`).join("")}</div>`;
   if (ui.saleMode === "extra") return h + viewExtra();
@@ -508,6 +523,7 @@ function viewAuswertung(){
     <div class="toolbar"><button class="btn sec" data-export="bestand">Bestand</button><button class="btn sec" data-export="buchungen">Alle Buchungen</button></div>
     <h2>Daten &amp; Konto</h2>
     <div class="toolbar"><button class="btn sec" data-export="json">Sicherung herunterladen</button><button class="btn sec" data-import>Sicherung einlesen</button></div>
+    <button class="btn sec block" data-import-paste style="margin-top:8px">Kopierte Daten einfügen</button>
     <div class="small" style="margin-top:10px">Angemeldet als <b>${esc(currentUser && currentUser.email || "")}</b></div>
     <button class="btn sec block" data-logout style="margin-top:8px">Abmelden</button>`;
   return h;
@@ -570,6 +586,7 @@ document.addEventListener("click", e => {
   if (ds.del){ confirmDelete(ds.del); return; }
   if (ds.export){ exportCsv(ds.export); return; }
   if (ds.import !== undefined){ pickImportFile(); return; }
+  if (ds.importPaste !== undefined){ openPasteImport(); return; }
   if (ds.logout !== undefined){ signOutNow(); return; }
 });
 document.addEventListener("change", e => {
