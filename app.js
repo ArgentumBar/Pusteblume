@@ -1056,11 +1056,288 @@ function init(){
   db = firestoreDb();
   const slowTimer = setTimeout(() => { if (!(loaded.a && loaded.m && loaded.c) && status !== "denied"){ status = "slow"; render(); } }, 10000);
   const onErr = e => { status = e && e.code === "permission-denied" ? "denied" : "error"; render(); };
-  const ready = () => { if (loaded.a && loaded.m && loaded.c && (status === "slow" || status === "loading")){ status = "ok"; clearTimeout(slowTimer); } recompute(); render(); };
+  const ready = () => { if (loaded.a && loaded.m && loaded.c && (status === "slow" || status === "loading")){ status = "ok"; clearTimeout(slowTimer); } recompute(); render(); if (co.on) coRenderCart(); };
   db.collection("articles").onSnapshot(snap => { articles = {}; snap.docs.forEach(d => articles[d.id] = d.data()); if (!snap.metadata.fromCache || snap.size) loaded.a = true; ready(); }, onErr);
   db.collection("moves").onSnapshot(snap => { moves = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(m => m.a && m.d); if (!snap.metadata.fromCache || snap.size) loaded.m = true; ready(); }, onErr);
+  coResume();
   db.collection("closings").onSnapshot(snap => { closings = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(c => c.d); if (!snap.metadata.fromCache || snap.size) loaded.c = true; ready(); }, onErr);
 }
+
+/* =====================================================================
+   Kassen-Modus (Checkout)
+   Start: Tippen auf das SO-Logo oben rechts.
+   Verlassen: nur mit Sicherheitscode.
+   QR-Codes der Etiketten werden mit der Kamera gelesen (jsQR) und landen
+   im Warenkorb. «Bezahlen» → Übersicht → «Bestätigen» bucht die Verkäufe
+   aus dem Lager Laden aus (wie im Bereich Verkauf) und markiert sie als bezahlt.
+   ===================================================================== */
+const CHECKOUT_CODE = "808080";
+const CO_KEY = "pb_checkout", CO_CART = "pb_checkout_cart";
+const co = { on: false, cart: [], stream: null, timer: null, last: { text: "", t: 0 }, audio: null, built: false };
+try { co.on = localStorage.getItem(CO_KEY) === "1"; co.cart = JSON.parse(localStorage.getItem(CO_CART) || "[]"); } catch (_) {}
+
+function coSave(){ try { localStorage.setItem(CO_KEY, co.on ? "1" : "0"); localStorage.setItem(CO_CART, JSON.stringify(co.cart)); } catch (_) {} }
+const coTotal = () => co.cart.reduce((s, l) => s + l.qty * l.preis, 0);
+const coCount = () => co.cart.reduce((s, l) => s + l.qty, 0);
+
+function coBuild(){
+  if (co.built) return;
+  co.built = true;
+  const el = document.createElement("div");
+  el.id = "co"; el.className = "co";
+  el.innerHTML = `
+    <div class="cohead">
+      <div><div class="cot">Kasse</div><div class="small" id="coHint">QR-Code des Etiketts vor die Kamera halten</div></div>
+      <button class="btn sec coexit" id="coExit" aria-label="Kassen-Modus verlassen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Beenden</button>
+    </div>
+    <div class="cocam" id="coCam">
+      <video id="coVideo" playsinline muted autoplay></video>
+      <div class="coframe" id="coFrame"></div>
+      <div class="comsg" id="coMsg"></div>
+      <button class="btn cocamstart" id="coCamStart">Kamera starten</button>
+    </div>
+    <div class="colist" id="coList"></div>
+    <div class="cofoot">
+      <div><div class="l" id="coCountL">Total</div><div class="v" id="coTotal">CHF 0.00</div></div>
+      <button class="btn terra" id="coPay">Bezahlen</button>
+    </div>`;
+  document.getElementById("device").appendChild(el);
+  el.querySelector("#coExit").onclick = coAskCode;
+  el.querySelector("#coCamStart").onclick = () => { coAudioUnlock(); coStartCamera(); };
+  el.querySelector("#coPay").onclick = coPay;
+  el.addEventListener("click", e => {
+    const b = e.target.closest("[data-coq]");
+    if (b){ coChangeQty(b.dataset.key, parseInt(b.dataset.coq)); return; }
+    if (e.target.closest("[data-coadd]")) coManualAdd();
+  });
+}
+
+function coEnter(){
+  co.on = true; coSave();
+  coBuild(); coAudioUnlock();
+  document.getElementById("co").classList.add("show");
+  document.body.classList.add("checkout");
+  closeSheet();
+  coRenderCart();
+  coStartCamera();
+}
+function coLeave(){
+  co.on = false; coSave();
+  coStopCamera();
+  const el = document.getElementById("co"); if (el) el.classList.remove("show");
+  document.body.classList.remove("checkout");
+  render();
+}
+
+/* ---------- Kamera & Erkennung ---------- */
+async function coStartCamera(){
+  const msg = document.getElementById("coMsg"), btn = document.getElementById("coCamStart");
+  if (co.stream) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ coSetMsg("Kamera wird von diesem Gerät nicht unterstützt – Artikel über «Artikel suchen» hinzufügen.", "err"); return; }
+  if (!window.jsQR){ coSetMsg("QR-Erkennung nicht geladen – bitte App neu öffnen.", "err"); return; }
+  try {
+    btn.style.display = "none";
+    co.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    const v = document.getElementById("coVideo");
+    v.srcObject = co.stream;
+    try { await v.play(); } catch (_) {}
+    coSetMsg("");
+    coScanLoop();
+  } catch (err){
+    console.error(err); co.stream = null; btn.style.display = "";
+    coSetMsg(err && err.name === "NotAllowedError" ? "Kamera nicht erlaubt. Bitte Zugriff erlauben und «Kamera starten» tippen." : "Kamera konnte nicht gestartet werden.", "err");
+  }
+}
+function coStopCamera(){
+  clearTimeout(co.timer); co.timer = null;
+  if (co.stream){ co.stream.getTracks().forEach(t => t.stop()); co.stream = null; }
+  const v = document.getElementById("coVideo"); if (v) v.srcObject = null;
+  const btn = document.getElementById("coCamStart"); if (btn) btn.style.display = "";
+}
+const coCanvas = document.createElement("canvas");
+const coCtx = coCanvas.getContext("2d", { willReadFrequently: true });
+function coScanLoop(){
+  clearTimeout(co.timer);
+  if (!co.on || !co.stream) return;
+  const v = document.getElementById("coVideo");
+  const paused = document.getElementById("sheet").classList.contains("open"); // während Bezahlen/Code-Eingabe nicht scannen
+  if (!paused && v && v.readyState >= 2 && v.videoWidth){
+    const scale = Math.min(1, 800 / Math.max(v.videoWidth, v.videoHeight));
+    const w = Math.round(v.videoWidth * scale), h = Math.round(v.videoHeight * scale);
+    if (coCanvas.width !== w){ coCanvas.width = w; coCanvas.height = h; }
+    coCtx.drawImage(v, 0, 0, w, h);
+    try {
+      const img = coCtx.getImageData(0, 0, w, h);
+      const r = window.jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+      if (r && r.data) coHandleScan(r.data);
+    } catch (e){ console.warn(e); }
+  }
+  co.timer = setTimeout(coScanLoop, 160);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!co.on) return;
+  if (document.visibilityState === "hidden") coStopCamera(); else coStartCamera();
+});
+
+function coFindArticle(d){
+  const list = allArticles().filter(a => label(a) === d.artikel);
+  if (!list.length) return null;
+  return list.find(a => groupOf(a) === d.label) || list[0];
+}
+function coHandleScan(text){
+  const now = Date.now();
+  if (text === co.last.text && now - co.last.t < 1400){ co.last.t = now; return; } // gleiches Etikett erst wieder zählen, wenn es kurz weg war
+  co.last = { text, t: now };
+  let d;
+  try { d = JSON.parse(text); } catch (_){ coFeedback(false, "Kein Pusteblume-Etikett"); return; }
+  if (!d || typeof d.artikel !== "string"){ coFeedback(false, "Kein Pusteblume-Etikett"); return; }
+  const a = coFindArticle(d);
+  if (!a){ coFeedback(false, "Unbekannter Artikel: " + d.artikel); return; }
+  const preis = typeof d.preis === "number" ? d.preis : a.vk;
+  if (preis == null){ coFeedback(false, "Kein Preis für " + label(a)); return; }
+  coAdd(a, preis);
+  coFeedback(true, "+1 " + label(a));
+}
+function coAdd(a, preis){
+  const key = a.id + "|" + preis;
+  const line = co.cart.find(l => l.key === key);
+  if (line) line.qty += 1;
+  else co.cart.push({ key, aid: a.id, artikel: label(a), label: groupOf(a), preis, ek: a.ek ?? 0, qty: 1 });
+  coSave(); coRenderCart(key);
+}
+function coChangeQty(key, delta){
+  const line = co.cart.find(l => l.key === key); if (!line) return;
+  line.qty = Math.max(0, line.qty + delta);
+  if (!line.qty) co.cart = co.cart.filter(l => l !== line);
+  coSave(); coRenderCart();
+}
+function coSetMsg(t, kind){
+  const m = document.getElementById("coMsg"); if (!m) return;
+  m.textContent = t || ""; m.className = "comsg" + (t ? " show " + (kind || "") : "");
+}
+let coMsgTimer = null;
+function coFeedback(ok, t){
+  coSetMsg(t, ok ? "ok" : "err");
+  const f = document.getElementById("coFrame");
+  if (f){ f.classList.remove("hit", "miss"); void f.offsetWidth; f.classList.add(ok ? "hit" : "miss"); }
+  coBeep(ok);
+  try { if (navigator.vibrate) navigator.vibrate(ok ? 60 : [40, 60, 40]); } catch (_){}
+  clearTimeout(coMsgTimer); coMsgTimer = setTimeout(() => coSetMsg(""), 1800);
+}
+function coAudioUnlock(){
+  try {
+    if (!co.audio){ const AC = window.AudioContext || window.webkitAudioContext; if (AC) co.audio = new AC(); }
+    if (co.audio && co.audio.state === "suspended") co.audio.resume();
+  } catch (_){}
+}
+function coBeep(ok){
+  try {
+    const ac = co.audio; if (!ac) return;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.value = ok ? 1320 : 330; o.type = "sine";
+    g.gain.setValueAtTime(0.0001, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.25, ac.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + (ok ? 0.12 : 0.25));
+    o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.3);
+  } catch (_){}
+}
+
+/* ---------- Warenkorb ---------- */
+function coRenderCart(flashKey){
+  const list = document.getElementById("coList"); if (!list) return;
+  let h = `<div class="cobar"><span>${coCount()} Artikel</span><button class="btn sec cosmall" data-coadd>+ Artikel suchen</button></div>`;
+  if (!co.cart.length) h += `<div class="empty">Noch nichts gescannt.</div>`;
+  for (const l of co.cart){
+    const a = articles[l.aid];
+    const low = a && (shop[l.aid] || 0) < l.qty;
+    h += `<div class="coline${l.key === flashKey ? " flash" : ""}">
+      <div class="main"><div class="name">${esc(l.artikel)}</div>
+        <div class="meta">${grpBadge({ group: l.label })}CHF ${fmt2(l.preis)}${low ? ' <span class="badge b-low">im Laden nur ' + (shop[l.aid] || 0) + '</span>' : ""}</div></div>
+      <div class="coqty"><button data-coq="-1" data-key="${esc(l.key)}" aria-label="weniger">−</button><b>${l.qty}</b><button data-coq="1" data-key="${esc(l.key)}" aria-label="mehr">+</button></div>
+      <div class="cosum">${fmt2(l.qty * l.preis)}</div>
+    </div>`;
+  }
+  list.innerHTML = h;
+  document.getElementById("coTotal").textContent = chf(coTotal());
+  document.getElementById("coPay").disabled = !co.cart.length;
+  if (flashKey){ const el = list.querySelector(".coline.flash"); if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+}
+function coManualAdd(){
+  const render = q => allArticles().filter(a => a.vk != null && matches(a, q)).slice(0, 60).map(a =>
+    `<div class="row" data-pick="${a.id}"><div class="main"><div class="name">${esc(label(a))}</div><div class="meta">${grpBadge(a)}CHF ${fmt2(a.vk)} · im Laden ${shop[a.id] || 0}</div></div><span class="chev">+</span></div>`).join("") || '<div class="empty">Kein Artikel gefunden.</div>';
+  openSheet(`<h3>Artikel hinzufügen</h3><div class="search"><input id="coq" type="search" placeholder="Artikel suchen …" autocomplete="off"></div><div class="group" id="coPick">${render("")}</div>`, s => {
+    const inp = s.querySelector("#coq");
+    inp.addEventListener("input", () => { s.querySelector("#coPick").innerHTML = render(inp.value); });
+    s.querySelector("#coPick").addEventListener("click", e => {
+      const r = e.target.closest("[data-pick]"); if (!r) return;
+      const a = { id: r.dataset.pick, ...articles[r.dataset.pick] };
+      coAdd(a, a.vk); closeSheet(); toast("+1 " + label(a));
+    });
+  });
+}
+
+/* ---------- Bezahlen ---------- */
+function coPay(){
+  if (!co.cart.length) return;
+  const total = coTotal();
+  openSheet(`<h3>Bezahlen</h3><div class="small">${coCount()} Artikel</div>
+    <div class="group" style="margin-top:10px;box-shadow:none;border:1px solid var(--line)"><table>
+      <tr><th>Artikel</th><th>Stk.</th><th>CHF</th></tr>
+      ${co.cart.map(l => `<tr><td>${esc(l.artikel)}<div class="small">à ${fmt2(l.preis)}</div></td><td>${l.qty}</td><td>${fmt2(l.qty * l.preis)}</td></tr>`).join("")}
+    </table></div>
+    <div class="cototal"><span>Total</span><b>${chf(total)}</b></div>
+    <div class="actions"><button class="btn sec" id="cancel">Zurück</button><button class="btn terra" id="ok">Bestätigen</button></div>`, s => {
+    s.querySelector("#cancel").onclick = closeSheet;
+    s.querySelector("#ok").onclick = async () => {
+      const b = s.querySelector("#ok"); b.disabled = true; b.textContent = "Wird gebucht …";
+      const now = new Date().toISOString();
+      const lines = co.cart.slice();
+      for (const l of lines){
+        const ref = await addMove({ a: l.aid, t: "sale", loc: "shop", q: -l.qty, p: l.preis, ek: l.ek, paid: true, paidAt: now, d: now, note: "Kasse" });
+        if (!ref){ b.disabled = false; b.textContent = "Bestätigen"; return; }
+        co.cart = co.cart.filter(x => x !== l); coSave();
+      }
+      closeSheet(); coRenderCart();
+      coFeedback(true, "Bezahlt: " + chf(total));
+      toast("Verkauf gebucht · " + chf(total));
+    };
+  });
+}
+
+/* ---------- Sicherheitscode ---------- */
+function coAskCode(){
+  let code = "";
+  const keys = ["1","2","3","4","5","6","7","8","9","","0","⌫"];
+  openSheet(`<h3>Kassen-Modus verlassen</h3><div class="small">Sicherheitscode eingeben</div>
+    <div class="pindots" id="pinDots">${"<span></span>".repeat(6)}</div>
+    <div class="small pinmsg" id="pinMsg"></div>
+    <div class="pinpad">${keys.map(k => k === "" ? "<span></span>" : `<button data-pin="${k}">${k}</button>`).join("")}</div>
+    <button class="btn sec block" id="cancel" style="margin-top:12px">In der Kasse bleiben</button>`, s => {
+    const dots = () => s.querySelectorAll("#pinDots span").forEach((d, i) => d.classList.toggle("on", i < code.length));
+    s.querySelector("#cancel").onclick = closeSheet;
+    s.querySelector(".pinpad").addEventListener("click", e => {
+      const b = e.target.closest("[data-pin]"); if (!b) return;
+      const k = b.dataset.pin;
+      if (k === "⌫") code = code.slice(0, -1); else if (code.length < 6) code += k;
+      dots();
+      if (code.length === 6){
+        if (code === CHECKOUT_CODE){ closeSheet(); coLeave(); toast("Kassen-Modus beendet"); }
+        else {
+          s.querySelector("#pinMsg").textContent = "Falscher Code";
+          const pd = s.querySelector("#pinDots"); pd.classList.remove("shake"); void pd.offsetWidth; pd.classList.add("shake");
+          code = ""; setTimeout(dots, 250);
+        }
+      }
+    });
+  });
+}
+
+/* Logo-Tipp startet die Kasse; nach dem Laden der Daten ggf. direkt wieder in die Kasse */
+document.addEventListener("click", e => {
+  if (e.target.closest(".solog") && started && !co.on){ e.preventDefault(); coEnter(); }
+});
+function coResume(){ if (co.on){ coBuild(); document.getElementById("co").classList.add("show"); document.body.classList.add("checkout"); coRenderCart(); coStartCamera(); } }
+
 // Für Fehlersuche in der Browser-Konsole
 window.__pb = { get articles(){ return articles; }, get moves(){ return moves; }, get home(){ return home; }, get shop(){ return shop; }, get gift(){ return gift; } };
 boot();
