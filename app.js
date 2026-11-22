@@ -222,6 +222,7 @@ const CATS = ["Baby & Kinder","Taschen & Textil","Papeterie","Deko & Geschenke"]
 /* Artikelgruppen: Artikel ohne Eintrag gehören zur ersten Gruppe (Manu). */
 const GROUPS = ["Manu","Marlies","Esther"];
 const groupOf = a => (a && GROUPS.includes(a.group)) ? a.group : GROUPS[0];
+const grpBadge = a => `<span class="badge b-grp g-${groupOf(a).toLowerCase()}">${esc(groupOf(a))}</span>`;
 const TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
 const LOC = {home:"Zuhause", shop:"Laden", gift:"Geschenksets"};
 const LOCS = ["home","shop","gift"];
@@ -358,7 +359,7 @@ function viewLaden(loc){
     for (const a of items){
       const s = S[a.id] || 0; const noPrice = a.vk == null;
       h += `<div class="row" data-open-sale="${a.id}" data-loc="${loc}"><div class="main"><div class="name">${esc(rowTitle(a, items))}${isGift?"":shopBadge(a)}</div>
-        <div class="meta">${noPrice?'<span class="badge b-warn" style="margin:0">Preis fehlt</span>':chf(a.vk)} · ${isGift?"in Geschenksets":"im Laden"} ${s}${!isGift&&(home[a.id]||0)>0?` · zuhause ${home[a.id]}`:""}${!isGift&&(gift[a.id]||0)>0?` · in Sets ${gift[a.id]}`:""}</div></div>
+        <div class="meta">${grpBadge(a)}${noPrice?'<span class="badge b-warn" style="margin:0">Preis fehlt</span>':chf(a.vk)} · ${isGift?"in Geschenksets":"im Laden"} ${s}${!isGift&&(home[a.id]||0)>0?` · zuhause ${home[a.id]}`:""}${!isGift&&(gift[a.id]||0)>0?` · in Sets ${gift[a.id]}`:""}</div></div>
         <button class="quick ${isGift?"gs":""}" data-quick="${a.id}" data-loc="${loc}" ${(s<=0||noPrice||readOnly)?"disabled":""} aria-label="1 verkauft">−1</button></div>`;
     }
     h += `</div>`;
@@ -388,7 +389,7 @@ function viewExtra(){
     for (const a of items){
       const H = home[a.id]||0; const noPrice = a.vk == null;
       h += `<div class="row" data-open-xsale="${a.id}"><div class="main"><div class="name">${esc(rowTitle(a, items))}${H<=0?'<span class="badge b-out">zuhause leer</span>':""}</div>
-        <div class="meta">${noPrice?'<span class="badge b-warn" style="margin:0">Preis fehlt</span>':chf(a.vk)} · zuhause ${H}</div></div>
+        <div class="meta">${grpBadge(a)}${noPrice?'<span class="badge b-warn" style="margin:0">Preis fehlt</span>':chf(a.vk)} · zuhause ${H}</div></div>
         <button class="quick xs" data-open-xsale="${a.id}" ${(H<=0||readOnly)?"disabled":""} aria-label="Ausserordentlich verkaufen">−</button></div>`;
     }
     h += `</div>`;
@@ -446,12 +447,12 @@ function viewLager(){
     for (const a of items){
       const H = home[a.id]||0, S = shop[a.id]||0;
       if (ui.lagerMode === "umbuchen"){
-        h += `<div class="row" data-open-tr="${a.id}"><div class="main"><div class="name">${esc(rowTitle(a, items))}</div></div>
+        h += `<div class="row" data-open-tr="${a.id}"><div class="main"><div class="name">${esc(rowTitle(a, items))}</div><div class="meta">${grpBadge(a)}</div></div>
           <div class="locs"><span><small>Zuhause</small>${H}</span><span><small>Laden</small>${S}</span><span><small>Sets</small>${gift[a.id]||0}</span></div>
           <button class="quick in" data-open-tr="${a.id}" ${readOnly?"disabled":""} aria-label="Umbuchen">⇄</button></div>`;
       } else {
         h += `<div class="row" data-open-in="${a.id}"><div class="main"><div class="name">${esc(rowTitle(a, items))}</div>
-          <div class="meta">EK ${chf(a.ek)} · zuhause ${H}${a.supplier && !isGrouped(items)?" · "+esc(a.supplier):""}</div></div>
+          <div class="meta">${grpBadge(a)}EK ${chf(a.ek)} · zuhause ${H}${a.supplier && !isGrouped(items)?" · "+esc(a.supplier):""}</div></div>
           <button class="quick in" data-open-in="${a.id}" ${readOnly?"disabled":""} aria-label="Lieferung einbuchen">+</button></div>`;
       }
     }
@@ -475,7 +476,7 @@ function viewArtikel(){
     for (const a of items){
       const miss = [a.ek==null?"EK":null, a.vk==null?"VK":null].filter(Boolean);
       h += `<div class="row" data-open-art="${a.id}"><div class="main"><div class="name">${esc(rowTitle(a, items))}${miss.length?`<span class="badge b-warn">${miss.join(" + ")} fehlt</span>`:""}</div>
-        <div class="meta"><span class="badge b-grp">${esc(groupOf(a))}</span> EK ${chf(a.ek)} · VK ${chf(a.vk)}${a.supplier?" · "+esc(a.supplier):""}</div></div>
+        <div class="meta">${grpBadge(a)}EK ${chf(a.ek)} · VK ${chf(a.vk)}${a.supplier?" · "+esc(a.supplier):""}</div></div>
         <div class="locs"><span><small>Total</small>${total(a.id)}</span></div><span class="chev">›</span></div>`;
     }
     h += `</div>`;
