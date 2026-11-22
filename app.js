@@ -903,8 +903,11 @@ function drawLabel(f){
   const font = (wt, mm) => `${wt} ${Math.round(mm * S)}px "DM Sans", "Helvetica Neue", Arial, sans-serif`;
   ctx.textBaseline = "alphabetic";
   let nameMm = 2.5; ctx.font = font(600, nameMm);
+  const words = String(d.artikel || "Artikel").split(/\s+/);
+  const widest = () => Math.max(0, ...words.map(w => ctx.measureText(w).width));
+  while (widest() > tw && nameMm > 1.9){ nameMm -= 0.05; ctx.font = font(600, nameMm); } // lange Wörter nicht trennen, lieber etwas kleiner
   let lines = fitLines(ctx, d.artikel || "Artikel", tw, 2);
-  if (lines.length === 2 && lines[1].endsWith("…")){ nameMm = 2.15; ctx.font = font(600, nameMm); lines = fitLines(ctx, d.artikel, tw, 2); }
+  if (lines.length === 2 && lines[1].endsWith("…") && nameMm > 2.15){ nameMm = 2.15; ctx.font = font(600, nameMm); lines = fitLines(ctx, d.artikel, tw, 2); }
   let y = LABEL.margin * S + nameMm * 0.95 * S;
   for (const ln of lines){ ctx.fillText(ln, tx, y); y += nameMm * 1.12 * S; }
   ctx.font = font(400, 2.1);
