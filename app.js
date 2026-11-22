@@ -851,6 +851,44 @@ function openNew(){
     };
   });
 }
+/* ---------- Etiketten ----------
+   Format in Millimetern – hier anpassen, sobald das Etikettenformat feststeht. */
+const LABEL = { w: 50, h: 25, pad: 1.5 };
+function labelData(f){
+  const artikel = f.variant ? f.name + " · " + f.variant : f.name;
+  return { artikel, label: f.group || GROUPS[0], preis: f.vk == null ? null : Math.round(f.vk * 100) / 100 };
+}
+function qrSvg(text){
+  if (!window.makeQrMatrix) return "";
+  const m = window.makeQrMatrix(text, "M"), n = m.length, q = 2, size = n + 2 * q;
+  let d = "";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (m[r][c]) d += `M${c + q} ${r + q}h1v1h-1z`;
+  return `<svg class="lqr" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><rect width="${size}" height="${size}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+}
+function labelHtml(f){
+  const d = labelData(f);
+  const qr = qrSvg(JSON.stringify(d));
+  return `<div class="plabel" style="width:${LABEL.w}mm;height:${LABEL.h}mm;padding:${LABEL.pad}mm">
+    <div class="lqrw" style="width:${LABEL.h - 2 * LABEL.pad}mm;height:${LABEL.h - 2 * LABEL.pad}mm">${qr}</div>
+    <div class="ltxt"><div class="l1${(d.artikel||"").length > 30 ? " long" : ""}">${esc(d.artikel || "Artikel")}</div><div class="l2">${esc(d.label)}</div><div class="l3">${d.preis == null ? "Preis fehlt" : "CHF " + fmt2(d.preis)}</div></div>
+  </div>`;
+}
+function printLabels(f, count){
+  if (!f.name) return toast("Bitte zuerst einen Artikelnamen eingeben.");
+  if (f.vk == null) return toast("Bitte zuerst einen Verkaufspreis eingeben.");
+  count = Math.max(1, Math.min(100, count));
+  let area = document.getElementById("printArea");
+  if (!area){ area = document.createElement("div"); area.id = "printArea"; document.body.appendChild(area); }
+  const one = labelHtml(f);
+  area.innerHTML = Array.from({length: count}, () => `<div class="printPage">${one}</div>`).join("");
+  let st = document.getElementById("printPageStyle");
+  if (!st){ st = document.createElement("style"); st.id = "printPageStyle"; document.head.appendChild(st); }
+  st.textContent = `@page { size: ${LABEL.w}mm ${LABEL.h}mm; margin: 0; }`;
+  document.body.classList.add("printing");
+  const done = () => { document.body.classList.remove("printing"); window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  setTimeout(() => { try { window.print(); } catch (_) { toast("Drucken ist hier nicht möglich."); } setTimeout(done, 1500); }, 50);
+}
 function openArticle(id){
   const a = articles[id]; if (!a) return;
   const hist = moves.filter(m => m.a === id).sort((x,y) => y.d.localeCompare(x.d)).slice(0, 15);
@@ -858,12 +896,20 @@ function openArticle(id){
   openSheet(`<h3>${esc(label(a))}</h3><div class="small">Zuhause <b>${home[id]||0}</b> · Laden <b>${shop[id]||0}</b> · Geschenksets <b>${gift[id]||0}</b> · bisher ${soldAll} verkauft${lastSale[id]?" · zuletzt "+lastSale[id].toLocaleDateString("de-CH"):""}</div>
     ${articleForm(a)}
     <div class="actions"><button class="btn sec" id="cancel">Abbrechen</button><button class="btn" id="ok" ${readOnly?"disabled":""}>Speichern</button></div>
+    <h2 style="font-size:16px">Etikett</h2>
+    <div class="small">${LABEL.w} × ${LABEL.h} mm · zeigt die Angaben aus dem Formular oben</div>
+    <div class="labelPreview" id="labelPreview"></div>
+    <div class="labelPrint">${stepper("lc", 1)}<button class="btn" id="lprint">Drucken</button></div>
     <h2 style="font-size:16px">Inventur – tatsächlich gezählt</h2>
     <div class="three"><div><label>Zuhause</label><input class="f" id="ih" type="number" inputmode="numeric" placeholder="${home[id]||0}"></div><div><label>Laden</label><input class="f" id="is" type="number" inputmode="numeric" placeholder="${shop[id]||0}"></div><div><label>Geschenksets</label><input class="f" id="ig" type="number" inputmode="numeric" placeholder="${gift[id]||0}"></div></div>
     <button class="btn sec block" id="icok" style="margin-top:10px" ${readOnly?"disabled":""}>Bestand korrigieren</button>
     <h2 style="font-size:16px">Letzte Buchungen</h2><div class="hist">${hist.length ? hist.map(m => `<div class="h" style="align-items:center"><span style="flex:1">${new Date(m.d).toLocaleDateString("de-CH")} · ${esc(moveLabel(m))}</span><span class="${m.t==="tr"?"":(m.q>0?"pos":"neg")}">${m.t==="tr"?Math.abs(m.q):(m.q>0?"+":"")+m.q}</span>${readOnly?"":`<button class="x" data-del="${m.id}" aria-label="Buchung löschen">${TRASH}</button>`}</div>`).join("") : '<div class="small">Noch keine.</div>'}</div>
     ${readOnly?"":`<button class="btn danger block" id="delart" style="margin-top:18px">Artikel löschen</button>`}`,
   s => {
+    const updLabel = () => { const f = readForm(s); s.querySelector("#labelPreview").innerHTML = labelHtml(f); };
+    s.querySelectorAll("#an, #av, #ag, #ak").forEach(el => { el.addEventListener("input", updLabel); el.addEventListener("change", updLabel); });
+    updLabel();
+    s.querySelector("#lprint").onclick = () => printLabels(readForm(s), parseInt(s.querySelector("#lc").value) || 1);
     s.querySelector("#cancel").onclick = closeSheet;
     s.querySelector("#ok").onclick = async () => {
       const f = readForm(s); if (!f.name) return toast("Bitte Namen angeben.");

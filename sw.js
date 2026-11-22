@@ -1,11 +1,12 @@
 /* Service Worker – Pusteblume Laden
    Bei jeder neuen App-Version wird VERSION erhöht. Das Handy erkennt die
    neue Version, und die App zeigt «Neue Version verfügbar». */
-const VERSION = "pb-2026-11-22-5";
+const VERSION = "pb-2026-11-22-6";
 const SHELL = [
   "./",
   "./index.html",
   "./app.js",
+  "./qrcode.js",
   "./firebase-config.js",
   "./manifest.webmanifest",
   "./logo-pusteblume.png",

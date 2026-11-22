@@ -180,6 +180,29 @@ header{padding-top:calc(14px + env(safe-area-inset-top))}
 .login h2{margin-top:0}
 .updatebar{position:fixed;left:50%;transform:translateX(-50%) translateY(-150%);top:calc(10px + env(safe-area-inset-top));z-index:50;background:var(--green);color:#fff;padding:11px 16px;border-radius:12px;font-weight:600;font-size:14px;box-shadow:var(--shadow);transition:transform .25s;cursor:pointer;white-space:nowrap}
 .updatebar.show{transform:translateX(-50%)}
+
+/* Etikett */
+.labelPreview{margin-top:10px;padding:14px;background:#ece5da;border-radius:12px;display:flex;justify-content:center;overflow:hidden}
+.labelPreview .plabel{zoom:1.55;box-shadow:0 1px 3px rgba(0,0,0,.18);border-radius:1mm}
+.plabel{box-sizing:border-box;background:#fff;color:#000;display:flex;align-items:center;gap:2mm;font-family:"DM Sans",Arial,sans-serif;overflow:hidden}
+.lqrw{flex:none}.lqrw svg{width:100%;height:100%;display:block}
+.ltxt{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:space-between;padding:0.3mm 0}
+.ltxt .l1{font-size:3mm;line-height:1.15;font-weight:500;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;hyphens:manual;overflow-wrap:break-word}
+.ltxt .l1.long{font-size:2.55mm}
+.ltxt .l2{font-size:2.6mm;line-height:1.2;color:#222}
+.ltxt .l3{font-size:4.8mm;line-height:1.1;font-weight:700;white-space:nowrap}
+.labelPrint{display:flex;gap:10px;align-items:center;margin-top:10px}
+.labelPrint .stepper{margin:0}.labelPrint .stepper input{width:64px}
+.labelPrint .btn{flex:1}
+#printArea{display:none}
+@media print{
+  html,body{background:#fff !important;display:block !important;padding:0 !important;margin:0 !important;min-height:0 !important}
+  body.printing > *:not(#printArea){display:none !important}
+  body.printing #printArea{display:block !important}
+  .printPage{page-break-after:always;break-after:page}
+  .printPage:last-child{page-break-after:auto;break-after:auto}
+  .plabel{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
 /* Breite Fenster: App in iPhone-16-Grösse (393 × 852) anzeigen */
 @media (min-width: 480px){
   html,body{height:100%}
@@ -221,6 +244,7 @@ header{padding-top:calc(14px + env(safe-area-inset-top))}
 
 <input type="file" id="importFile" accept="application/json,.json" hidden>
 <div class="updatebar" id="updateBar">Neue Version verfügbar – tippen zum Aktualisieren</div>
+<script src="qrcode.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>
