@@ -219,6 +219,9 @@ const dayLabel = d => d.toLocaleDateString("de-CH", {weekday:"long", day:"numeri
 const timeLabel = d => d.toLocaleTimeString("de-CH", {hour:"2-digit", minute:"2-digit"});
 const dtLabel = d => d.toLocaleString("de-CH", {weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"});
 const CATS = ["Baby & Kinder","Taschen & Textil","Papeterie","Deko & Geschenke"];
+/* Artikelgruppen: Artikel ohne Eintrag gehören zur ersten Gruppe (Manu). */
+const GROUPS = ["Manu","Marlies","Esther"];
+const groupOf = a => (a && GROUPS.includes(a.group)) ? a.group : GROUPS[0];
 const TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
 const LOC = {home:"Zuhause", shop:"Laden", gift:"Geschenksets"};
 const LOCS = ["home","shop","gift"];
@@ -251,7 +254,7 @@ let loaded = {a:false, m:false, c:false};
 let status = "loading";
 let readOnly = false;
 let tab = "verkauf";
-const ui = { saleMode:"laden", payFilter:"offen", q:"", cat:"Alle", lagerMode:"umbuchen", stockFilter:"alle", period:"woche", logFilter:"alle", lq:"" };
+const ui = { saleMode:"laden", payFilter:"offen", q:"", cat:"Alle", lagerMode:"umbuchen", grp:"Alle", stockFilter:"alle", period:"woche", logFilter:"alle", lq:"" };
 
 function recompute(){
   home = {}; shop = {}; gift = {}; lastSale = {};
@@ -460,17 +463,19 @@ function viewLager(){
 
 /* Artikelverwaltung */
 function viewArtikel(){
-  const list = filtered();
+  const list = filtered().filter(a => ui.grp === "Alle" || groupOf(a) === ui.grp);
   let h = `<div class="toolbar"><button class="btn" data-new ${readOnly?"disabled":""}>+ Neuer Artikel</button></div>`;
-  h += searchBox("Artikel suchen …") + catChips();
-  h += `<div class="small" style="margin:0 0 8px">${allArticles().length} Artikel · antippen zum Bearbeiten oder Löschen</div>`;
+  h += searchBox("Artikel suchen …");
+  h += '<div class="chips">' + ["Alle", ...GROUPS].map(g => `<button class="chip ${ui.grp===g?"on":""}" data-grp="${esc(g)}">${g==="Alle"?"Alle Gruppen":esc(g)}</button>`).join("") + '</div>';
+  h += catChips();
+  h += `<div class="small" style="margin:0 0 8px">${list.length} von ${allArticles().length} Artikeln · antippen zum Bearbeiten oder Löschen</div>`;
   if (!list.length) return h + '<div class="empty">Kein Artikel gefunden.</div>';
   for (const [name, items] of groupBy(list)){
     h += `<div class="group">${isGrouped(items) ? `<div class="ghead">${esc(name)}<span class="sub">${esc(items[0].cat||"")}</span></div>` : ""}`;
     for (const a of items){
       const miss = [a.ek==null?"EK":null, a.vk==null?"VK":null].filter(Boolean);
       h += `<div class="row" data-open-art="${a.id}"><div class="main"><div class="name">${esc(rowTitle(a, items))}${miss.length?`<span class="badge b-warn">${miss.join(" + ")} fehlt</span>`:""}</div>
-        <div class="meta">EK ${chf(a.ek)} · VK ${chf(a.vk)}${a.supplier?" · "+esc(a.supplier):""}</div></div>
+        <div class="meta"><span class="badge b-grp">${esc(groupOf(a))}</span> EK ${chf(a.ek)} · VK ${chf(a.vk)}${a.supplier?" · "+esc(a.supplier):""}</div></div>
         <div class="locs"><span><small>Total</small>${total(a.id)}</span></div><span class="chev">›</span></div>`;
     }
     h += `</div>`;
@@ -566,6 +571,7 @@ document.addEventListener("click", e => {
   const ds = t.dataset;
   if (ds.tab){ tab = ds.tab; ui.q = ""; render(); window.scrollTo(0,0); $("#screen").scrollTop = 0; return; }
   if (ds.cat){ ui.cat = ds.cat; render(); return; }
+  if (ds.grp){ ui.grp = ds.grp; render(); return; }
   if (ds.sf){ ui.stockFilter = ds.sf; render(); return; }
   if (ds.smode){ ui.saleMode = ds.smode; ui.q = ""; render(); return; }
   if (ds.pf){ ui.payFilter = ds.pf; render(); return; }
@@ -811,6 +817,7 @@ function articleForm(a = {}){
   const isNew = !a.name;
   return `<label>Artikelname</label><input class="f" id="an" value="${esc(a.name||"")}" placeholder="z. B. Baby Body">
     <label>${isNew ? "Varianten / Grössen (mit Komma trennen, optional)" : "Variante / Grösse"}</label><input class="f" id="av" value="${esc(a.variant||"")}" placeholder="z. B. 0-3 Monate, 3-6 Monate">
+    <label>Artikelgruppe</label><select class="f" id="ag">${GROUPS.map(g => `<option ${groupOf(a)===g?"selected":""}>${g}</option>`).join("")}</select>
     <div class="two"><div><label>Kategorie</label><select class="f" id="ac">${CATS.map(c => `<option ${a.cat===c?"selected":""}>${c}</option>`).join("")}</select></div>
     <div><label>Lieferant</label><input class="f" id="al" value="${esc(a.supplier||"")}"></div></div>
     <div class="two"><div><label>Einkaufspreis</label><input class="f" id="ae" inputmode="decimal" value="${a.ek!=null?fmt2(a.ek):""}"></div>
@@ -818,7 +825,7 @@ function articleForm(a = {}){
     <div class="two"><div><label>Warnen ab Bestand im Laden</label><input class="f" id="am" type="number" inputmode="numeric" value="${a.min ?? 2}"></div>${isNew?`<div><label>Startbestand zuhause</label><input class="f" id="as" type="number" inputmode="numeric" value="0"></div>`:""}</div>`;
 }
 function readForm(s){
-  return { name:s.querySelector("#an").value.trim(), variant:s.querySelector("#av").value.trim(), cat:s.querySelector("#ac").value,
+  return { name:s.querySelector("#an").value.trim(), variant:s.querySelector("#av").value.trim(), cat:s.querySelector("#ac").value, group:s.querySelector("#ag").value,
     supplier:s.querySelector("#al").value.trim(), ek:num(s.querySelector("#ae").value), vk:num(s.querySelector("#ak").value),
     min:parseInt(s.querySelector("#am").value) || 0 };
 }
@@ -930,8 +937,8 @@ async function exportCsv(kind){
     return;
   }
   if (kind === "bestand"){
-    rows = [["Artikel","Variante","Kategorie","Lieferant","EK","VK","Zuhause","Laden","Geschenksets","Total","Warenwert EK","Warenwert VK"]];
-    for (const a of allArticles()){ const t = total(a.id); rows.push([a.name, a.variant, a.cat, a.supplier, dec(a.ek), dec(a.vk), home[a.id]||0, shop[a.id]||0, gift[a.id]||0, t, dec(t*(a.ek||0)), dec(t*(a.vk||0))]); }
+    rows = [["Artikel","Variante","Artikelgruppe","Kategorie","Lieferant","EK","VK","Zuhause","Laden","Geschenksets","Total","Warenwert EK","Warenwert VK"]];
+    for (const a of allArticles()){ const t = total(a.id); rows.push([a.name, a.variant, groupOf(a), a.cat, a.supplier, dec(a.ek), dec(a.vk), home[a.id]||0, shop[a.id]||0, gift[a.id]||0, t, dec(t*(a.ek||0)), dec(t*(a.vk||0))]); }
     fname = "Bestand_" + todayStr() + ".csv";
   } else {
     rows = [["Datum","KW","Buchung","Artikel","Variante","Menge","Preis/Stk","Betrag","EK/Stk","Betrag erhalten","Notiz"]];
