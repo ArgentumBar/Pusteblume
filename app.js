@@ -851,43 +851,88 @@ function openNew(){
     };
   });
 }
-/* ---------- Etiketten ----------
-   Format in Millimetern – hier anpassen, sobald das Etikettenformat feststeht. */
-const LABEL = { w: 50, h: 25, pad: 1.5 };
+/* ---------- Etiketten (NIIMBOT B-Serie, 40 × 15 mm) ----------
+   Das Etikett wird als Bild erzeugt und in der NIIMBOT-App gedruckt.
+   Auflösung des Druckers: 203 dpi = 8 Punkte pro mm. Das Bild wird 3-fach
+   so fein gezeichnet (24 px/mm); jedes QR-Modul ist ein Vielfaches von 3 px,
+   damit es beim Verkleinern auf Druckerauflösung scharf bleibt. */
+const LABEL = { w: 40, h: 15, dpmm: 8, scale: 3, margin: 0.8 };
 function labelData(f){
   const artikel = f.variant ? f.name + " · " + f.variant : f.name;
   return { artikel, label: f.group || GROUPS[0], preis: f.vk == null ? null : Math.round(f.vk * 100) / 100 };
 }
-function qrSvg(text){
-  if (!window.makeQrMatrix) return "";
-  const m = window.makeQrMatrix(text, "M"), n = m.length, q = 2, size = n + 2 * q;
-  let d = "";
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (m[r][c]) d += `M${c + q} ${r + q}h1v1h-1z`;
-  return `<svg class="lqr" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><rect width="${size}" height="${size}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+function fitLines(ctx, text, maxW, maxLines){
+  const words = String(text).split(/\s+/).filter(Boolean), lines = [];
+  let cur = "";
+  for (const w of words){
+    const t = cur ? cur + " " + w : w;
+    if (ctx.measureText(t).width <= maxW){ cur = t; continue; }
+    if (cur) lines.push(cur);
+    cur = w;
+    while (ctx.measureText(cur).width > maxW){ // sehr langes Wort umbrechen
+      let k = cur.length; while (k > 1 && ctx.measureText(cur.slice(0, k)).width > maxW) k--;
+      lines.push(cur.slice(0, k)); cur = cur.slice(k);
+    }
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > maxLines){
+    const keep = lines.slice(0, maxLines); let last = keep[maxLines - 1];
+    while (last.length && ctx.measureText(last + "…").width > maxW) last = last.slice(0, -1);
+    keep[maxLines - 1] = last.trimEnd() + "…"; return keep;
+  }
+  return lines;
 }
-function labelHtml(f){
+function drawLabel(f){
   const d = labelData(f);
-  const qr = qrSvg(JSON.stringify(d));
-  return `<div class="plabel" style="width:${LABEL.w}mm;height:${LABEL.h}mm;padding:${LABEL.pad}mm">
-    <div class="lqrw" style="width:${LABEL.h - 2 * LABEL.pad}mm;height:${LABEL.h - 2 * LABEL.pad}mm">${qr}</div>
-    <div class="ltxt"><div class="l1${(d.artikel||"").length > 30 ? " long" : ""}">${esc(d.artikel || "Artikel")}</div><div class="l2">${esc(d.label)}</div><div class="l3">${d.preis == null ? "Preis fehlt" : "CHF " + fmt2(d.preis)}</div></div>
-  </div>`;
+  const S = LABEL.dpmm * LABEL.scale;                 // Pixel pro mm
+  const W = LABEL.w * S, H = LABEL.h * S;
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#000";
+  // QR-Code links, Module auf Druckerpunkte ausgerichtet
+  const m = window.makeQrMatrix ? window.makeQrMatrix(JSON.stringify(d), "L") : [[]];
+  const n = m.length, quiet = 1;
+  const availDots = Math.floor((LABEL.h - 2 * LABEL.margin) * LABEL.dpmm);
+  const modDots = Math.max(1, Math.floor(availDots / (n + 2 * quiet)));
+  const mod = modDots * LABEL.scale, qrSize = (n + 2 * quiet) * mod;
+  const qx = Math.round(LABEL.margin * S / LABEL.scale) * LABEL.scale, qy = Math.round((H - qrSize) / 2 / LABEL.scale) * LABEL.scale;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (m[r][c]) ctx.fillRect(qx + (c + quiet) * mod, qy + (r + quiet) * mod, mod, mod);
+  // Text rechts: Bezeichnung, Label, Preis
+  const tx = qx + qrSize + 1.0 * S, tw = W - tx - LABEL.margin * S;
+  const font = (wt, mm) => `${wt} ${Math.round(mm * S)}px "DM Sans", "Helvetica Neue", Arial, sans-serif`;
+  ctx.textBaseline = "alphabetic";
+  let nameMm = 2.5; ctx.font = font(600, nameMm);
+  let lines = fitLines(ctx, d.artikel || "Artikel", tw, 2);
+  if (lines.length === 2 && lines[1].endsWith("…")){ nameMm = 2.15; ctx.font = font(600, nameMm); lines = fitLines(ctx, d.artikel, tw, 2); }
+  let y = LABEL.margin * S + nameMm * 0.95 * S;
+  for (const ln of lines){ ctx.fillText(ln, tx, y); y += nameMm * 1.12 * S; }
+  ctx.font = font(400, 2.1);
+  ctx.fillText(fitLines(ctx, d.label, tw, 1)[0] || "", tx, H - LABEL.margin * S - 3.7 * S);
+  let priceMm = 3.6; const pt = d.preis == null ? "Preis fehlt" : "CHF " + fmt2(d.preis);
+  ctx.font = font(700, priceMm);
+  while (ctx.measureText(pt).width > tw && priceMm > 2.4){ priceMm -= 0.1; ctx.font = font(700, priceMm); }
+  ctx.fillText(pt, tx, H - LABEL.margin * S - 0.35 * S);
+  return { canvas: cv, data: d, modDots, n };
 }
-function printLabels(f, count){
+function labelFileName(d){
+  return "Etikett_" + (d.artikel || "Artikel").replace(/[^\wäöüÄÖÜ-]+/g, "_").replace(/_+/g, "_").slice(0, 40) + ".png";
+}
+async function shareLabel(f){
   if (!f.name) return toast("Bitte zuerst einen Artikelnamen eingeben.");
   if (f.vk == null) return toast("Bitte zuerst einen Verkaufspreis eingeben.");
-  count = Math.max(1, Math.min(100, count));
-  let area = document.getElementById("printArea");
-  if (!area){ area = document.createElement("div"); area.id = "printArea"; document.body.appendChild(area); }
-  const one = labelHtml(f);
-  area.innerHTML = Array.from({length: count}, () => `<div class="printPage">${one}</div>`).join("");
-  let st = document.getElementById("printPageStyle");
-  if (!st){ st = document.createElement("style"); st.id = "printPageStyle"; document.head.appendChild(st); }
-  st.textContent = `@page { size: ${LABEL.w}mm ${LABEL.h}mm; margin: 0; }`;
-  document.body.classList.add("printing");
-  const done = () => { document.body.classList.remove("printing"); window.removeEventListener("afterprint", done); };
-  window.addEventListener("afterprint", done);
-  setTimeout(() => { try { window.print(); } catch (_) { toast("Drucken ist hier nicht möglich."); } setTimeout(done, 1500); }, 50);
+  try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (_){}
+  const { canvas, data } = drawLabel(f);
+  const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
+  const file = new File([blob], labelFileName(data), { type: "image/png" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })){
+    try { await navigator.share({ files: [file], title: "Etikett " + data.artikel }); return; }
+    catch (err){ if (err && err.name === "AbortError") return; }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast("Bild gespeichert");
 }
 function openArticle(id){
   const a = articles[id]; if (!a) return;
@@ -897,19 +942,25 @@ function openArticle(id){
     ${articleForm(a)}
     <div class="actions"><button class="btn sec" id="cancel">Abbrechen</button><button class="btn" id="ok" ${readOnly?"disabled":""}>Speichern</button></div>
     <h2 style="font-size:16px">Etikett</h2>
-    <div class="small">${LABEL.w} × ${LABEL.h} mm · zeigt die Angaben aus dem Formular oben</div>
-    <div class="labelPreview" id="labelPreview"></div>
-    <div class="labelPrint">${stepper("lc", 1)}<button class="btn" id="lprint">Drucken</button></div>
+    <div class="small">NIIMBOT ${LABEL.w} × ${LABEL.h} mm · zeigt die Angaben aus dem Formular oben</div>
+    <div class="labelPreview"><img id="labelPreview" alt="Etikett-Vorschau"></div>
+    <button class="btn block" id="lshare" style="margin-top:10px">Bild für NIIMBOT teilen</button>
+    <details class="lhelp"><summary>So druckst du in der NIIMBOT-App</summary>
+      <ol><li>«Bild für NIIMBOT teilen» → <b>Bild sichern</b>.</li>
+      <li>NIIMBOT-App → neues Etikett, Grösse <b>40 × 15 mm</b>.</li>
+      <li><b>Bild</b> einfügen → das gesicherte Etikett wählen → auf die ganze Etikettenfläche ziehen.</li>
+      <li>Anzahl einstellen → <b>Drucken</b>.</li></ol></details>
     <h2 style="font-size:16px">Inventur – tatsächlich gezählt</h2>
     <div class="three"><div><label>Zuhause</label><input class="f" id="ih" type="number" inputmode="numeric" placeholder="${home[id]||0}"></div><div><label>Laden</label><input class="f" id="is" type="number" inputmode="numeric" placeholder="${shop[id]||0}"></div><div><label>Geschenksets</label><input class="f" id="ig" type="number" inputmode="numeric" placeholder="${gift[id]||0}"></div></div>
     <button class="btn sec block" id="icok" style="margin-top:10px" ${readOnly?"disabled":""}>Bestand korrigieren</button>
     <h2 style="font-size:16px">Letzte Buchungen</h2><div class="hist">${hist.length ? hist.map(m => `<div class="h" style="align-items:center"><span style="flex:1">${new Date(m.d).toLocaleDateString("de-CH")} · ${esc(moveLabel(m))}</span><span class="${m.t==="tr"?"":(m.q>0?"pos":"neg")}">${m.t==="tr"?Math.abs(m.q):(m.q>0?"+":"")+m.q}</span>${readOnly?"":`<button class="x" data-del="${m.id}" aria-label="Buchung löschen">${TRASH}</button>`}</div>`).join("") : '<div class="small">Noch keine.</div>'}</div>
     ${readOnly?"":`<button class="btn danger block" id="delart" style="margin-top:18px">Artikel löschen</button>`}`,
   s => {
-    const updLabel = () => { const f = readForm(s); s.querySelector("#labelPreview").innerHTML = labelHtml(f); };
+    const updLabel = () => { const f = readForm(s); s.querySelector("#labelPreview").src = drawLabel(f).canvas.toDataURL("image/png"); };
     s.querySelectorAll("#an, #av, #ag, #ak").forEach(el => { el.addEventListener("input", updLabel); el.addEventListener("change", updLabel); });
     updLabel();
-    s.querySelector("#lprint").onclick = () => printLabels(readForm(s), parseInt(s.querySelector("#lc").value) || 1);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (s.querySelector("#labelPreview")) updLabel(); });
+    s.querySelector("#lshare").onclick = () => shareLabel(readForm(s));
     s.querySelector("#cancel").onclick = closeSheet;
     s.querySelector("#ok").onclick = async () => {
       const f = readForm(s); if (!f.name) return toast("Bitte Namen angeben.");
